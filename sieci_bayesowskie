@@ -1,0 +1,51 @@
+from pgmpy.models import BayesianModel
+from pgmpy.factors.discrete import TabularCPD
+from pgmpy.inference import VariableElimination
+
+# Definicja modelu
+car_diagnosis_model = BayesianModel([
+    ('Battery', 'Radio'),
+    ('Battery', 'Ignition'),
+    ('Ignition', 'Starts'),
+    ('Gas', 'Starts'),
+    ('Starts', 'Moves'),
+    ('NotIcyWeather', 'Starts'),
+    ('StarterMotor', 'Starts'),
+])
+
+# CPD dla poszczególnych zmiennych
+cpd_battery = TabularCPD('Battery', 2, [[0.7], [0.3]])
+cpd_radio = TabularCPD('Radio', 2, [[0.9, 0], [0.1, 1]], evidence=['Battery'], evidence_card=[2])
+cpd_ignition = TabularCPD('Ignition', 2, [[0.97, 0], [0.03, 1]], evidence=['Battery'], evidence_card=[2])
+cpd_gas = TabularCPD('Gas', 2, [[0.5], [0.5]])
+cpd_starts = TabularCPD('Starts', 2, [[0.95, 0, 0, 0, 0.15, 0, 0, 0], 
+                                      [0.05, 1, 1, 1, 0.85, 1, 1, 1]],
+                        evidence=['Ignition', 'Gas', 'NotIcyWeather', 'StarterMotor'],
+                        evidence_card=[2, 2, 2, 2])
+cpd_moves = TabularCPD('Moves', 2, [[0.8, 0], [0.2, 1]], evidence=['Starts'], evidence_card=[2])
+cpd_not_icy_weather = TabularCPD('NotIcyWeather', 2, [[0.9], [0.1]])
+cpd_starter_motor = TabularCPD('StarterMotor', 2, [[0.95], [0.05]])
+
+# Dodawanie CPD do modelu
+car_diagnosis_model.add_cpds(cpd_battery, cpd_radio, cpd_ignition, cpd_gas, 
+                             cpd_starts, cpd_moves, cpd_not_icy_weather, cpd_starter_motor)
+
+# Weryfikacja modelu
+assert car_diagnosis_model.check_model()
+
+# Funkcja do wykonywania zapytań do modelu
+def query_model(model, query_variable, evidence):
+    car_infer = VariableElimination(model)
+    return car_infer.query(variables=[query_variable], evidence=evidence)
+
+# Zapytanie 1: Prawdopodobieństwo, że samochód się uruchomi, jeśli radio działa i jest paliwo
+result_start = query_model(car_diagnosis_model, 'Starts', {'Radio': 1, 'Gas': 1})
+print(result_start['Starts'])
+
+# Zapytanie 2: Prawdopodobieństwo, że bateria jest dobra, jeśli samochód się porusza
+result_battery = query_model(car_diagnosis_model, 'Battery', {'Moves': 1})
+print(result_battery['Battery'])
+
+# Zapytanie 5: Prawdopodobieństwo, że radio zadziała, jeśli samochód nie odpalił
+result_radio = query_model(car_diagnosis_model, 'Radio', {'Starts': 0})
+print(result_radio['Radio'])
