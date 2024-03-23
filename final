@@ -22,8 +22,8 @@ cpd_gas = TabularCPD('Gas', 2, [[0.5], [0.5]], state_names={'Gas': ['True', 'Fal
 cpd_not_icy_weather = TabularCPD('NotIcyWeather', 2, [[0.9], [0.1]], state_names={'NotIcyWeather': ['True', 'False']})
 cpd_starter_motor = TabularCPD('StarterMotor', 2, [[0.95, 0.05], [0.05, 0.95]], evidence=['Battery'], evidence_card=[2], state_names={'StarterMotor': ['True', 'False'], 'Battery': ['True', 'False']})
 cpd_starts = TabularCPD('Starts', 2,
-                        [[0.85, 0.85, 0.85, 0.85, 0, 0, 0, 0, 0.85, 0.15, 0.15, 0.15, 1, 1, 1, 1],
-                         [0.15, 0.15, 0.15, 0.15, 1, 1, 1, 1, 0.85, 0.85, 0.85, 0.85, 0, 0, 0, 0]],
+                        [[0.85, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                         [0.15, 1, 1, 1, 1, 1, 1, 1, 1,1 , 1, 1, 1, 1, 1, 1]],
                         evidence=['Ignition', 'Gas', 'StarterMotor', 'NotIcyWeather'],
                         evidence_card=[2, 2, 2, 2],
                         state_names={'Starts': ['True', 'False'],
@@ -42,3 +42,4 @@ infer_updated = VariableElimination(car_model_updated)
 radio_prob_given_car_not_start = infer_updated.query(variables=['Radio'], evidence={'Starts': 'False'})
 
 print("Probability of Radio :", radio_prob_given_car_not_start)
+
