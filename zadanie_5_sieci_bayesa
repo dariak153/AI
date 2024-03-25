@@ -1,0 +1,61 @@
+from pgmpy.models import BayesianModel
+from pgmpy.factors.discrete import TabularCPD
+from pgmpy.inference import VariableElimination
+
+# Initialize the Bayesian Model
+model = BayesianModel([('Rain_t-1', 'Rain_t'), ('Rain_t', 'Umbrella_t')])
+
+# Initialize the CPDs
+cpd_r0 = TabularCPD(variable='Rain_t-1', variable_card=2, values=[[0.6], [0.4]])
+cpd_rt_given_rt_1 = TabularCPD(variable='Rain_t', variable_card=2,
+                               values=[[0.7, 0.3],
+                                       [0.3, 0.7]],
+                               evidence=['Rain_t-1'],
+                               evidence_card=[2])
+cpd_ut_given_rt = TabularCPD(variable='Umbrella_t', variable_card=2,
+                             values=[[0.9, 0.2],
+                                     [0.1, 0.8]],
+                             evidence=['Rain_t'],
+                             evidence_card=[2])
+
+model.add_cpds(cpd_r0, cpd_rt_given_rt_1, cpd_ut_given_rt)
+
+assert model.check_model()
+
+inference = VariableElimination(model)
+
+observations = {'Umbrella_t': [True, True, False, True, True]}
+
+def update_rain_probability(observations):
+    rain_probability = cpd_r0.values
+    for obs in observations['Umbrella_t']:
+        rain_probability = inference.query(variables=['Rain_t'],
+                                           evidence={'Umbrella_t': int(obs)}).values
+    return rain_probability
+
+def predict_and_update(rain_probability, observation):
+    rain_probability_t_plus_1 = (cpd_rt_given_rt_1.values[0] * rain_probability[0] +
+                                 cpd_rt_given_rt_1.values[1] * rain_probability[1])
+
+
+    rain_probability_t_plus_1 = inference.query(variables=['Rain_t'],
+                                                evidence={'Umbrella_t': int(observation)}).values
+
+    return rain_probability_t_plus_1
+
+rain_probability = cpd_r0.values
+for obs in observations['Umbrella_t']:
+    rain_probability = predict_and_update(rain_probability, obs)
+    print(f"Probability of Rain : {rain_probability}")
+
+def predict_rain_probability(rain_probability, steps):
+    for _ in range(steps):
+        rain_probability = (cpd_rt_given_rt_1.values[0] * rain_probability[0] +
+                            cpd_rt_given_rt_1.values[1] * rain_probability[1])
+    return rain_probability
+
+rain_probability_t6 = predict_rain_probability(rain_probability, 1)
+print(f"Probability of Rain at t=6: {rain_probability_t6}")
+
+rain_probability_t9 = predict_rain_probability(rain_probability, 4)
+print(f"Probability of Rain at t=9: {rain_probability_t9}")
