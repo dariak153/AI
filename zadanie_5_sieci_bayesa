@@ -1,61 +1,69 @@
+import numpy as np
 from pgmpy.models import BayesianModel
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.inference import VariableElimination
 
-# Initialize the Bayesian Model
-model = BayesianModel([('Rain_t-1', 'Rain_t'), ('Rain_t', 'Umbrella_t')])
+def predict(observations):
+    model, cpd_r0 = create_bayesian_model()
+    inference = VariableElimination(model)
 
-# Initialize the CPDs
-cpd_r0 = TabularCPD(variable='Rain_t-1', variable_card=2, values=[[0.6], [0.4]])
-cpd_rt_given_rt_1 = TabularCPD(variable='Rain_t', variable_card=2,
-                               values=[[0.7, 0.3],
-                                       [0.3, 0.7]],
-                               evidence=['Rain_t-1'],
-                               evidence_card=[2])
-cpd_ut_given_rt = TabularCPD(variable='Umbrella_t', variable_card=2,
-                             values=[[0.9, 0.2],
-                                     [0.1, 0.8]],
-                             evidence=['Rain_t'],
-                             evidence_card=[2])
-
-model.add_cpds(cpd_r0, cpd_rt_given_rt_1, cpd_ut_given_rt)
-
-assert model.check_model()
-
-inference = VariableElimination(model)
-
-observations = {'Umbrella_t': [True, True, False, True, True]}
-
-def update_rain_probability(observations):
     rain_probability = cpd_r0.values
-    for obs in observations['Umbrella_t']:
-        rain_probability = inference.query(variables=['Rain_t'],
-                                           evidence={'Umbrella_t': int(obs)}).values
+    for i, obs in enumerate(observations['Umbrella_t']):
+        rain_probability_t_plus_1 = inference.query(variables=['Rain_' + str(i)],
+                                                    evidence={'Umbrella_' + str(i): int(obs)}).values
+        print(f"Probability of Rain : {rain_probability_t_plus_1}")
+        rain_probability = rain_probability_t_plus_1
     return rain_probability
 
-def predict_and_update(rain_probability, observation):
-    rain_probability_t_plus_1 = (cpd_rt_given_rt_1.values[0] * rain_probability[0] +
-                                 cpd_rt_given_rt_1.values[1] * rain_probability[1])
+def create_bayesian_model():
+    edge_list = []
 
+    for i in range(9):
+        edge_list.append(('Rain_' + str(i), 'Umbrella_' + str(i)))
+        if i < 9:
+            edge_list.append(('Rain_' + str(i), 'Rain_' + str(i + 1)))
 
-    rain_probability_t_plus_1 = inference.query(variables=['Rain_t'],
-                                                evidence={'Umbrella_t': int(observation)}).values
+    edge_list.append(('Rain_9', 'Umbrella_9'))
 
-    return rain_probability_t_plus_1
+    rain_network = BayesianModel(edge_list)
 
-rain_probability = cpd_r0.values
-for obs in observations['Umbrella_t']:
-    rain_probability = predict_and_update(rain_probability, obs)
-    print(f"Probability of Rain : {rain_probability}")
+    initial_rain_cpd = TabularCPD('Rain_0', 2, [[0.6], [0.4]], state_names={'Rain_0': [True, False]})
+    rain_network.add_cpds(initial_rain_cpd)
 
-def predict_rain_probability(rain_probability, steps):
-    for _ in range(steps):
-        rain_probability = (cpd_rt_given_rt_1.values[0] * rain_probability[0] +
-                            cpd_rt_given_rt_1.values[1] * rain_probability[1])
-    return rain_probability
+    initial_umbrella_cpd = TabularCPD('Umbrella_0', 2, [[0.9, 0.2], [0.1, 0.8]], evidence_card=[2],
+                                      evidence=['Rain_0'], state_names={'Umbrella_0': [True, False],
+                                                                       'Rain_0': [True, False]})
+    rain_network.add_cpds(initial_umbrella_cpd)
 
-rain_probability_t6 = predict_rain_probability(rain_probability, 1)
-print(f"Probability of Rain at t=6: {rain_probability_t6}")
+    for i in range(9):
+        rain_cpd = TabularCPD('Rain_' + str(i + 1), 2, [[0.7, 0.3], [0.3, 0.7]], evidence_card=[2],
+                              evidence=['Rain_' + str(i)], state_names={'Rain_' + str(i + 1): [True, False],
+                                                                       'Rain_' + str(i): [True, False]})
+        rain_network.add_cpds(rain_cpd)
 
-rain_probability_t9 = predict_rain_probability(rain_probability, 4)
-print(f"Probability of Rain at t=9: {rain_probability_t9}")
+        umbrella_cpd = TabularCPD('Umbrella_' + str(i + 1), 2, [[0.9, 0.2], [0.1, 0.8]], evidence_card=[2],
+                                  evidence=['Rain_' + str(i + 1)], state_names={'Umbrella_' + str(i + 1): [True, False],
+                                                                               'Rain_' + str(i + 1): [True, False]})
+        rain_network.add_cpds(umbrella_cpd)
+
+    assert rain_network.check_model()
+
+    return rain_network, initial_rain_cpd
+
+def compute_probability(day, umbrella_observations, inference):
+    evidence = {}
+    if umbrella_observations:
+        evidence.update({'Umbrella_' + str(i): umbrella_observations[i] for i in range(min(day, len(umbrella_observations)))})
+    prob = inference.query(variables=['Rain_' + str(day)], evidence=evidence)
+    return prob
+
+if __name__ == '__main__':
+    observations = {'Umbrella_t': [True, True, False, True, True]}
+    predict(observations)
+
+    model, _ = create_bayesian_model()
+    umbrella_observations = [True, True, False, True, True]
+    inference = VariableElimination(model)
+    for day in [5, 8]:
+        prob = compute_probability(day, umbrella_observations, inference)
+        print(f'Probability of Rain on Day {day} with umbrella observations:\n', prob)
