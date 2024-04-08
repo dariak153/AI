@@ -1,0 +1,82 @@
+import bp
+import numpy as np
+from pgmpy.models import FactorGraph
+from pgmpy.factors.discrete import DiscreteFactor
+from pgmpy.inference import BeliefPropagation
+
+def create_factor_graph(t):
+    t=5
+    nodes = []
+    nodes.extend(['Rain_' + str(i + 1) for i in range(-1, t)])
+    nodes.extend(['Umbrella_' + str(i + 1) for i in range(t)])
+
+    # factor for initial distribution
+    factor_r_0 = DiscreteFactor(['Rain_0'], [2], [0.6, 0.4])
+
+    factors_p = [DiscreteFactor(['Rain_' + str(i), 'Rain_' + str(i + 1)],
+                                [2, 2],
+                                [[0.7, 0.3],
+                                 [0.3, 0.7]]) for i in range(t)]
+
+    factors_s = [DiscreteFactor(['Rain_' + str(i + 1), 'Umbrella_' + str(i + 1)],
+                                [2, 2],
+                                [[0.9, 0.1],
+                                 [0.2, 0.8]]) for i in range(t)]
+
+
+    edges = [('Rain_0', factor_r_0)]
+    edges.extend([('Rain_' + str(i + 1), factors_s[i]) for i in range(t)])
+    edges.extend([('Umbrella_' + str(i + 1), factors_s[i]) for i in range(t)])
+    edges.extend([('Rain_' + str(i), factors_p[i]) for i in range(t - 1)])
+    edges.extend([('Rain_' + str(i + 1), factors_p[i]) for i in range(t - 1)])
+
+    G = FactorGraph()
+    G.add_nodes_from(nodes)
+    G.add_node(factor_r_0)
+    G.add_nodes_from(factors_p)
+    G.add_nodes_from(factors_s)
+    G.add_factors(factor_r_0)
+    G.add_factors(*factors_p)
+    G.add_factors(*factors_s)
+    G.add_edges_from(edges)
+
+    return G
+
+
+observations = [True, True,True, False, True, True]
+def compute_marginals(observations, factor_graph):
+    evidence={}
+    marginals=[]
+    bp=BeliefPropagation(factor_graph)
+    for i in range(5):
+        evidence = {'Umbrella_' + str(j + 1): obs for j, obs in enumerate(observations[:i + 1])}
+        marginal = bp.query(variables=['Rain_' + str(i + 1)], evidence=evidence)
+        marginals.append(marginal)
+        print("Marignals for Rain_{}:".format(i+1))
+    return marginals
+
+
+t = 5
+factor_graph = create_factor_graph(t)
+
+# Obliczenie rozkładów brzegowych dla kolejnych dni
+marginals = compute_marginals(observations, factor_graph)
+print("Marginal distributions for observations:", observations)
+for i, marginal in enumerate(marginals):
+    print("Rain_{}:".format(i + 1))
+    print(marginal)
+
+# Wyznaczanie most likely values
+most_likely_values=[]
+
+for marignal in marginals:
+    most_likely_values.append(marginal.values.argmax())
+print("Most likely values for observations:", observations)
+
+map_states=[]
+bp = BeliefPropagation(factor_graph)
+for i in range(5):
+    evidence = {'Umbrella_' + str(j + 1): obs for j, obs in enumerate(observations[:i + 1])}
+    map_state = bp.map_query(variables=['Rain_' + str(i + 1)], evidence=evidence)
+    map_states.append(map_state)
+print("MAP states for Rain_{}",map_states)
