@@ -1,0 +1,84 @@
+from pgmpy.inference import BeliefPropagation
+from pgmpy.models import FactorGraph
+from pgmpy.factors.discrete import DiscreteFactor
+
+# Maksymalna liczba dni
+t = 10
+
+# Węzły dla zmiennych
+nodes = []
+nodes.extend(['Rain_' + str(i + 1) for i in range(-1, t)])
+nodes.extend(['Umbrella_' + str(i + 1) for i in range(t)])
+
+# Czynnik dla rozkładu początkowego
+factor_r_0 = DiscreteFactor(['Rain_0'], [2], [0.6, 0.4])
+
+# Czynniki przejścia (zmodyfikowane)
+factors_p = [DiscreteFactor(['Rain_' + str(i), 'Rain_' + str(i + 1)],
+                           [2, 2],
+                           [[0.75, 0.25],
+                            [0.25, 0.75]]) for i in range(t)]
+
+# Czynniki sensorów
+factors_s = [DiscreteFactor(['Rain_' + str(i + 1), 'Umbrella_' + str(i + 1)],
+                           [2, 2],
+                           [[0.9, 0.1],
+                            [0.2, 0.8]]) for i in range(t)]
+
+# Krawędzie między zmiennymi a czynnikami
+edges = [('Rain_0', factor_r_0)]
+edges.extend([('Rain_' + str(i + 1), factors_s[i]) for i in range(t)])
+edges.extend([('Umbrella_' + str(i + 1), factors_s[i]) for i in range(t)])
+edges.extend([('Rain_' + str(i), factors_p[i]) for i in range(t - 1)])
+edges.extend([('Rain_' + str(i + 1), factors_p[i]) for i in range(t - 1)])
+
+# Tworzenie modelu
+G = FactorGraph()
+G.add_nodes_from(nodes)
+G.add_node(factor_r_0)
+G.add_nodes_from(factors_p)
+G.add_nodes_from(factors_s)
+G.add_factors(factor_r_0)
+G.add_factors(*factors_p)
+G.add_factors(*factors_s)
+G.add_edges_from(edges)
+
+# Sprawdzenie modelu
+print('Check model:', G.check_model())
+
+# Belief Propagation
+bp = BeliefPropagation(G)
+
+# Obserwacje parasoli dla wszystkich dni
+umbrella_observations = [1, 1, 0, 1, 1]
+
+# Słownik dla rozkładów brzegowych dla przeszłych stanów
+marginals_dict = {}
+
+# Wyniki dla kolejnych dni
+for i in range(len(umbrella_observations)):
+    # Tworzenie słownika z obserwacjami do dnia i
+    evidence = {'Umbrella_' + str(j + 1): obs for j, obs in enumerate(umbrella_observations[:i + 1])}
+
+    # Zmienna do zapytania - Rain_dzień
+    variables = ['Rain_' + str(i + 1)]
+
+    # Obliczanie rozkładów brzegowych
+    marginals = bp.query(variables=variables, evidence=evidence)
+
+    # Dodanie rozkładu brzegowego do słownika
+    marginals_dict[i] = marginals.values
+
+# Znalezienie ciągu wartości zmiennych Rain odpowiadającego największym wartościom rozkładów brzegowych
+best_sequence_marginals = [int(marginals_dict[i][1] > marginals_dict[i][0]) for i in range(len(umbrella_observations))]
+
+# Obliczanie rozkładu MAP dla tych samych obserwacji i prawdopodobieństwa zmiany stanu równej 0.75
+map_query = bp.map_query(variables=['Rain_' + str(i) for i in range(len(umbrella_observations))],
+                         evidence={'Umbrella_' + str(i + 1): obs for i, obs in enumerate(umbrella_observations)})
+
+# Znalezienie ciągu wartości zmiennych Rain odpowiadającego rozkładowi MAP
+best_sequence_map = [map_query['Rain_' + str(i)] for i in range(len(umbrella_observations))]
+
+# Wyświetlenie wyników
+print("Najlepszy ciąg wartości zmiennych Rain na podstawie rozkładów brzegowych:", best_sequence_marginals)
+print("Najlepszy ciąg wartości zmiennych Rain na podstawie rozkładu MAP:", best_sequence_map)
