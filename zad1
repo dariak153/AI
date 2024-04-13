@@ -49,8 +49,9 @@ bp = BeliefPropagation(G)
 umbrella_observations = [0, 0, 1, 0, 0]
 
 for i in range(t+1):
-    evidence = {'Umbrella_' + str(j + 1): obs for j, obs in enumerate(umbrella_observations[:i + 1])}
+    evidence = {'Umbrella_' + str(j + 1): obs for j, obs in enumerate(umbrella_observations[:i])}
     variables = ['Rain_' + str(i)]
     marginals = bp.query(variables=variables, evidence=evidence)
     print(f"Marginal distribution for Rain_{i} on Day {i}:", marginals)
+
 
