@@ -71,14 +71,22 @@ for i in range(len(umbrella_observations)):
 
 # Znalezienie ciągu wartości zmiennych Rain odpowiadającego największym wartościom rozkładów brzegowych
 best_sequence_marginals = [int(marginals_dict[i][1] > marginals_dict[i][0]) for i in range(len(umbrella_observations))]
-
-# Obliczanie rozkładu MAP dla tych samych obserwacji i prawdopodobieństwa zmiany stanu równej 0.75
 map_query = bp.map_query(variables=['Rain_' + str(i) for i in range(len(umbrella_observations))],
                          evidence={'Umbrella_' + str(i + 1): obs for i, obs in enumerate(umbrella_observations)})
 
 # Znalezienie ciągu wartości zmiennych Rain odpowiadającego rozkładowi MAP
 best_sequence_map = [map_query['Rain_' + str(i)] for i in range(len(umbrella_observations))]
 
-# Wyświetlenie wyników
+print("Marginały dla każdego dnia na podstawie rozkładu MAP:")
+marginals = []
+for day in range(len(umbrella_observations)):
+    evidence = {'Umbrella_' + str(i + 1): obs for i, obs in enumerate(umbrella_observations[:day + 1])}
+    marg = bp.query(variables=['Rain_' + str(day)], evidence=evidence)
+    marginals.append(marg.values[1])  # P(Rain=True)
+
+print("Marginały dla każdego dnia na podstawie rozkładów brzegowych:")
+for day, value in enumerate(marginals, start=1):
+    print(f"Dzień {day}: P(Rain_{day}) = {value}")
 print("Najlepszy ciąg wartości zmiennych Rain na podstawie rozkładów brzegowych:", best_sequence_marginals)
 print("Najlepszy ciąg wartości zmiennych Rain na podstawie rozkładu MAP:", best_sequence_map)
+
