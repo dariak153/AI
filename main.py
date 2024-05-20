@@ -1,265 +1,206 @@
 #!/usr/bin/env python
 
-"""code template"""
-
-import random
 import numpy as np
-
-from graphics import *
-from gridutil import *
-
-import agents
-
-
-class LocWorldEnv:
-    actions = "turnleft turnright forward".split()
-
-    def __init__(self, size, walls, gold, pits, eps_perc, eps_move, start_loc, start_dir, use_dirs):
-        self.size = size
-        self.walls = walls
-        self.gold = gold
-        self.pits = pits
-        self.action_sensors = []
-        self.locations = {*locations(self.size)}.difference(self.walls)
-        self.eps_perc = eps_perc
-        self.eps_move = eps_move
-        self.start_loc = start_loc
-        self.lifes = 3
-        self.start_dir = start_dir
-        self.use_dirs = use_dirs
-        self.reset()
-        self.finished = False
-
-    def reset(self):
-        self.agentLoc = self.start_loc
-        self.agentDir = self.start_dir
-
-    def getPercept(self):
-        p = self.action_sensors
-        self.action_sensors = []
-        for dir in ORIENTATIONS:
-            nh = nextLoc(self.agentLoc, dir)
-            prob = 0.0 + self.eps_perc
-            if (not legalLoc(nh, self.size)) or nh in self.walls:
-                prob = 1.0 - self.eps_perc
-            if random.random() < prob:
-                p.append(dir)
-
-        for dir in ORIENTATIONS:
-            nh = nextLoc(self.agentLoc, dir)
-            if nh in self.pits and 'breeze' not in p:
-                p.append('breeze')
-
-        if self.agentLoc in self.pits:
-            p.append('pit')
-
-        return p
-
-    def doAction(self, action):
-        points = -1
-
-        if self.use_dirs:
-            if action == 'forward':
-                loc = nextLoc(self.agentLoc, self.agentDir)
-                if legalLoc(loc, self.size) and (loc not in self.walls):
-                    self.agentLoc = loc
-                else:
-                    self.action_sensors.append("bump")
-            elif action == 'turnleft':
-                self.agentDir = leftTurn(self.agentDir)
-            elif action == 'turnright':
-                self.agentDir = rightTurn(self.agentDir)
-        else:
-            rand_val = random.random()
-            if rand_val < self.eps_move:
-                action = nextDirection(action, -1)
-            elif rand_val < 2 * self.eps_move:
-                action = nextDirection(action, 1)
-
-            loc = nextLoc(self.agentLoc, action)
-            if legalLoc(loc, self.size) and (loc not in self.walls):
-                self.agentLoc = loc
-            else:
-                self.action_sensors.append("bump")
-
-        if self.agentLoc in self.pits:
-            self.lifes -= 1
-            points -= 10
-            if self.lifes == 0:
-                self.finished = True
-            print('You stepped into a pit')
-
-        if self.agentLoc == self.gold:
-            points += 20
-            self.finished = True
-            print('You found gold!')
-
-        return points  # cost/benefit of action
-
-    # def finished(self):
-    #     return False
+import itertools
+import functools
+import cv2
+from pgmpy.models import MarkovNetwork
+from pgmpy.factors.discrete import DiscreteFactor
+from pgmpy.inference import Mplp
 
 
-class LocView:
-    # LocView shows a view of a LocWorldEnv. Just hand it an env, and
-    #   a window will pop up.
+def create_factor(var_names, var_vals, params, feats, obs):
+    f_vals_shape = [len(vals) for vals in var_vals]
+    f_vals = []
 
-    Size = .2
-    Points = {'N': (0, -Size, 0, Size), 'E': (-Size, 0, Size, 0),
-              'S': (0, Size, 0, -Size), 'W': (Size, 0, -Size, 0)}
+    for vals in itertools.product(*var_vals):
+        cur_f_val = sum(params[fi] * cur_feat(*vals, obs) for fi, cur_feat in enumerate(feats))
+        f_vals.append(np.exp(cur_f_val))
 
-    color = "black"
+    f_vals = np.array(f_vals).reshape(f_vals_shape)
+    return DiscreteFactor(var_names, f_vals_shape, f_vals)
 
-    def __init__(self, state, height=800, title="Loc World"):
-        xySize = state.size
-        win = self.win = GraphWin(title, 1.33 * height, height, autoflush=False)
-        win.setBackground("gray99")
-        win.setCoords(-.5, -.5, 1.33 * xySize - .5, xySize - .5)
-        cells = self.cells = {}
-        self.cells_prob = {}
-        for x in range(xySize):
-            for y in range(xySize):
-                cells[(x, y)] = Rectangle(Point(x - .5, y - .5), Point(x + .5, y + .5))
-                cells[(x, y)].setWidth(2)
-                cells[(x, y)].draw(win)
-        for x in range(xySize):
-            for y in range(xySize):
-                self.cells_prob[(x, y)] = Circle(Point(x, y), .25)
-                self.cells_prob[(x, y)].setWidth(2)
-                self.cells_prob[(x, y)].draw(win)
-        self.agt = None
-        self.arrow = None
-        ccenter = 1.167 * (xySize - .5)
-        # self.time = Text(Point(ccenter, (xySize - 1) * .75), "Time").draw(win)
-        # self.time.setSize(36)
-        # self.setTimeColor("black")
 
-        self.agentName = Text(Point(ccenter, (xySize - 1) * .5), "").draw(win)
-        self.agentName.setSize(20)
-        self.agentName.setFill("Orange")
+def unary_feat(x, obs):
+    obs = obs * 0.9 + 0.05
+    return np.log(obs[x])
 
-        self.info = Text(Point(ccenter, (xySize - 1) * .25), "").draw(win)
-        self.info.setSize(20)
-        self.info.setFace("courier")
-        self.policy_arrows = []
 
-        self.update(state)
+def pairwise_feat(ch, xi, xj, obs):
+    beta = 0.05
+    if xi == xj:
+        return 0
+    else:
+        diff = obs[0][ch] - obs[1][ch]
+        return -np.exp(-beta * diff * diff)
 
-    def setAgent(self, name):
-        self.agentName.setText(name)
 
-    # def setTime(self, seconds):
-    #     self.time.setText(str(seconds))
+def read_images(idx):
+    image = cv2.imread(f'export/image_{idx:04d}.jpg')
+    labels_gt_im = cv2.imread(f'export/labels_{idx:04d}.png', cv2.IMREAD_ANYDEPTH).astype(np.int8)
+    labels_gt_im[labels_gt_im == 65535] = -1
+    prob_im = cv2.imread(f'export/prob_{idx:04d}.png', cv2.IMREAD_ANYDEPTH) / 65535.0
+    segments_im = cv2.imread(f'export/segments_{idx:04d}.png', cv2.IMREAD_ANYDEPTH)
+    return image, labels_gt_im, prob_im, segments_im
 
-    def setInfo(self, info):
-        self.info.setText(info)
 
-    def update(self, state, P=None, pi=None):
-        # View state in exiting window
-        for loc, cell in self.cells.items():
-            if loc in state.walls:
-                cell.setFill("black")
-            elif loc == state.gold:
-                cell.setFill("yellow")
-            elif loc in state.pits:
-                cell.setFill("gray")
-            else:
-                cell.setFill("white")
+def process_image(image, labels_gt_im, prob_im, segments_im, map_size, pixels_thresh):
+    mean_rgb = np.zeros([map_size, map_size, 3], dtype=float)
+    num_pixels = np.zeros([map_size, map_size], dtype=int)
+    prob = np.zeros([map_size, map_size, 2], dtype=float)
+    labels_gt = -1 * np.ones([map_size, map_size], dtype=int)
 
-        if P is not None:
-            for loc, cell in self.cells_prob.items():
-                c = int(round(P[loc[0], loc[1]] * 255))
-                cell.setFill('#ff%02x%02x' % (255 - c, 255 - c))
+    for y in range(map_size):
+        for x in range(map_size):
+            cur_seg = y * map_size + x
+            cur_pixels = np.nonzero(segments_im == cur_seg)
 
-        if self.agt:
-            self.agt.undraw()
-        if state.agentLoc:
-            self.agt = self.drawArrow(state.agentLoc, state.agentDir, 10, self.color)
+            if len(cur_pixels[0]) > 0:
+                num_pixels[y, x] = len(cur_pixels[0])
+                mean_rgb[y, x, :] = np.flip(np.mean(image[cur_pixels], axis=0))
+                prob[y, x, 0] = np.mean(prob_im[cur_pixels])
+                prob[y, x, 1] = 1.0 - prob[y, x, 0]
+                labels_unique, count = np.unique(labels_gt_im[cur_pixels], return_counts=True)
+                labels_gt[y, x] = labels_unique[np.argmax(count)]
 
-        if pi:
-            for a in self.policy_arrows:
-                a.undraw()
-            self.policy_arrows = []
-            for loc, cell in self.cells.items():
-                if loc in pi:
-                    self.policy_arrows.append(self.drawArrow(loc, pi[loc], 3, 'green'))
+    return mean_rgb, num_pixels, prob, labels_gt
 
-    def drawArrow(self, loc, heading, width, color):
-        x, y = loc
-        dx0, dy0, dx1, dy1 = self.Points[heading]
-        p1 = Point(x + dx0, y + dy0)
-        p2 = Point(x + dx1, y + dy1)
-        a = Line(p1, p2)
-        a.setWidth(width)
-        a.setArrow('last')
-        a.setFill(color)
-        a.draw(self.win)
-        return a
 
-    def pause(self):
-        self.win.getMouse()
+def build_graph(map_size, pixels_thresh, num_pixels, prob, mean_rgb, unary_feat, pairwise_feat):
+    nodes = ['x_' + str(y) + '_' + str(x) for y in range(map_size) for x in range(map_size) if num_pixels[y, x] > pixels_thresh]
 
-    # def setTimeColor(self, c):
-    #     self.time.setTextColor(c)
+    var_to_factor_idx = {}
+    factors_u = []
+    for y in range(map_size):
+        for x in range(map_size):
+            if num_pixels[y, x] > pixels_thresh:
+                var = 'x_' + str(y) + '_' + str(x)
+                cur_f = create_factor([var], [[0, 1]], [0.945212], [unary_feat], prob[y, x])
+                var_to_factor_idx[var] = len(factors_u)
+                factors_u.append(cur_f)
 
-    def close(self):
-        self.win.close()
+    factors_p = []
+    edges_p = []
+    for y in range(map_size - 1):
+        for x in range(map_size - 1):
+            if num_pixels[y, x] > pixels_thresh:
+                if num_pixels[y + 1, x] > pixels_thresh:
+                    cur_f_r = create_factor(['x_' + str(y) + '_' + str(x), 'x_' + str(y + 1) + '_' + str(x)],
+                                            [[0, 1], [0, 1]], [1.86891, 1.07741, 1.89271],
+                                            [functools.partial(pairwise_feat, 0),
+                                             functools.partial(pairwise_feat, 1),
+                                             functools.partial(pairwise_feat, 2)],
+                                            [mean_rgb[y, x], mean_rgb[y + 1, x]])
+                    factors_p.append(cur_f_r)
+                    edges_p.append(('x_' + str(y) + '_' + str(x), 'x_' + str(y + 1) + '_' + str(x)))
+
+                if num_pixels[y, x + 1] > pixels_thresh:
+                    cur_f_c = create_factor(['x_' + str(y) + '_' + str(x), 'x_' + str(y) + '_' + str(x + 1)],
+                                            [[0, 1], [0, 1]], [1.86891, 1.07741, 1.89271],
+                                            [functools.partial(pairwise_feat, 0),
+                                             functools.partial(pairwise_feat, 1),
+                                             functools.partial(pairwise_feat, 2)],
+                                            [mean_rgb[y, x], mean_rgb[y, x + 1]])
+                    factors_p.append(cur_f_c)
+                    edges_p.append(('x_' + str(y) + '_' + str(x), 'x_' + str(y) + '_' + str(x + 1)))
+
+    G = MarkovNetwork()
+    G.add_nodes_from(nodes)
+    G.add_factors(*factors_u)
+    G.add_factors(*factors_p)
+    G.add_edges_from(edges_p)
+
+    return G, var_to_factor_idx
+
+
+def infer_labels(G, var_to_factor_idx, num_pixels, map_size, pixels_thresh):
+    class_infer = Mplp(G)
+    q = class_infer.map_query()
+
+    labels_infer = -1 * np.ones([map_size, map_size], dtype=int)
+    for y in range(map_size):
+        for x in range(map_size):
+            if num_pixels[y, x] > pixels_thresh:
+                var = 'x_' + str(y) + '_' + str(x)
+                labels_infer[y, x] = q[var]
+
+    return labels_infer
+
+
+def classify_labels(prob, num_pixels, map_size, pixels_thresh):
+    labels_class = -1 * np.ones([map_size, map_size], dtype=int)
+    for y in range(map_size):
+        for x in range(map_size):
+            if num_pixels[y, x] > pixels_thresh:
+                labels_class[y, x] = 0 if prob[y, x, 0] >= 0.5 else 1
+    return labels_class
+
+
+def transfer_labels_to_image(labels, segments_im, map_size):
+    labels_im = -1 * np.ones_like(segments_im)
+    for y in range(map_size):
+        for x in range(map_size):
+            if labels[y, x] >= 0:
+                cur_seg = y * map_size + x
+                cur_pixels = np.nonzero(segments_im == cur_seg)
+                labels_im[cur_pixels] = labels[y, x]
+    return labels_im
+
+
+def visualize_results(image, labels_infer_im, labels_class_im, labels_gt_im, colors):
+    def expand_labels(labels, image_shape):
+        expanded_labels = np.zeros((*image_shape, 3), dtype=np.uint8)
+        for i, color in enumerate(colors):
+            expanded_labels[labels == i] = color
+        return expanded_labels
+
+    labels_infer_rgb = expand_labels(labels_infer_im, image.shape[:2])
+    labels_class_rgb = expand_labels(labels_class_im, image.shape[:2])
+    labels_gt_rgb = expand_labels(labels_gt_im, image.shape[:2])
+
+    image_infer_vis = (0.75 * image + 0.25 * labels_infer_rgb).astype(np.uint8)
+    image_class_vis = (0.75 * image + 0.25 * labels_class_rgb).astype(np.uint8)
+    image_gt_vis = (0.75 * image + 0.25 * labels_gt_rgb).astype(np.uint8)
+
+    cv2.imshow('inferred', image_infer_vis)
+    cv2.imshow('classified', image_class_vis)
+    cv2.imshow('ground truth', image_gt_vis)
 
 
 def main():
-    random.seed(13)
-    # rate of executing actions
-    rate = 1
-    # chance that perception will be wrong
-    eps_perc = 0.0
-    # chance that the agent will not move forward despite the command
-    eps_move = 0.0
-    # probability that a location contains a pit
-    pit_prob = 0.2
-    # number of actions to execute
-    n_steps = 40
-    # size of the environment
-    env_size = 4
+    map_size = 50
+    pixels_thresh = 500
+    num_images = 70
 
-    # build the list of walls locations
-    start_loc = (0, 0)
-    start_dir = 'N'
-    walls = []
-    locs = list({*locations(env_size)}.difference(walls).difference([start_loc]))
-    gold = (3, 3)
-    pits = []
-    for i in range(env_size):
-        for j in range(env_size):
-            if i != 0 and j != 0:
-                if random.random() < pit_prob:
-                    pits.append((j, env_size - i - 1))
+    num_incorrect = 0
 
-    # create the environment and viewer
-    env = LocWorldEnv(env_size, walls, gold, pits, eps_perc, eps_move, start_loc, start_dir, use_dirs=True)
-    view = LocView(env)
+    for idx in range(num_images):
+        print(f'\n\nImage {idx}')
 
-    # create the agent
-    agent = agents.prob.LocAgent(env.size, pit_prob)
-    for t in range(n_steps):
-        print('step %d' % t)
+        image, labels_gt_im, prob_im, segments_im = read_images(idx)
+        cv2.imshow('original image', image)
+        cv2.waitKey(100)
 
-        percept = env.getPercept()
-        action = agent(percept)
-        # get what the agent thinks of the environment
-        P = agent.get_posterior()
+        mean_rgb, num_pixels, prob, labels_gt = process_image(image, labels_gt_im, prob_im, segments_im, map_size, pixels_thresh)
+        G, var_to_factor_idx = build_graph(map_size, pixels_thresh, num_pixels, prob, mean_rgb, unary_feat, pairwise_feat)
 
-        print('Percept: ', percept)
-        print('Action ', action)
+        print('Check model:', G.check_model())
 
-        view.update(env, P)
-        update(rate)
-        # uncomment to pause before action
-        view.pause()
+        labels_infer = infer_labels(G, var_to_factor_idx, num_pixels, map_size, pixels_thresh)
+        labels_class = classify_labels(prob, num_pixels, map_size, pixels_thresh)
 
-        env.doAction(action)
+        cnt_corr = np.sum(np.logical_and(labels_gt == labels_infer, labels_gt != -1))
+        print('Accuracy =', cnt_corr / np.sum(labels_gt != -1))
+        num_incorrect += np.sum(labels_gt != -1) - cnt_corr
 
-    # pause until mouse clicked
-    view.pause()
+        labels_infer_im = transfer_labels_to_image(labels_infer, segments_im, map_size)
+        labels_class_im = transfer_labels_to_image(labels_class, segments_im, map_size)
+
+        colors = np.array([[0, 255, 0], [0, 0, 255]], dtype=np.uint8)
+        visualize_results(image, labels_infer_im, labels_class_im, labels_gt_im, colors)
+        cv2.waitKey(100)
+
+    print('Incorrectly inferred', num_incorrect, 'segments')
 
 
 if __name__ == '__main__':
